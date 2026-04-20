@@ -26,7 +26,6 @@ def get_pending_jobs() -> list[MappingRule]:
         LEFT JOIN NEXT_MIG_INFO_DTL D ON R.MAP_ID = D.MAP_ID
         WHERE R.USE_YN = 'Y' 
           AND R.TARGET_YN IS NOT NULL
-          AND (R.STATUS IS NULL OR R.STATUS != 'RUNNING')
         ORDER BY R.PRIORITY ASC, D.FR_COL ASC
     """
     
@@ -77,8 +76,9 @@ def get_pending_jobs() -> list[MappingRule]:
     return list(jobs.values())
 
 def increment_batch_count(map_id: int):
-    logger.debug(f"[Repository] map_id={map_id} | BATCH_CNT +1 | STATUS -> RUNNING")
-    query = "UPDATE NEXT_MIG_INFO SET BATCH_CNT = COALESCE(BATCH_CNT, 0) + 1, STATUS = 'RUNNING', UPD_TS = CURRENT_TIMESTAMP WHERE MAP_ID = :1"
+    """작업 시작 시 BATCH_CNT를 1 증가시킵니다."""
+    logger.debug(f"[Repository] map_id={map_id} | BATCH_CNT +1")
+    query = "UPDATE NEXT_MIG_INFO SET BATCH_CNT = COALESCE(BATCH_CNT, 0) + 1, UPD_TS = CURRENT_TIMESTAMP WHERE MAP_ID = :1"
     try:
         with get_connection() as conn:
             cursor = conn.cursor()

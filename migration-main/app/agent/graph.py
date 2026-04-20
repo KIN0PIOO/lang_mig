@@ -110,12 +110,12 @@ def finalize_node(state: MigrationState) -> dict:
         update_job_status(job.map_id, "PASS", elapsed, state["db_attempts"])
         log_business_history(job.map_id, "INFO", "INFO", "VERIFY", "PASS", "Migration Success", state["db_attempts"], mig_kind)
         logger.info(f"[Graph:FINISH] map_id={job.map_id} | >>> 성공 <<<")
+        return {"elapsed_time": elapsed, "status": "PASS"}
     else:
         update_job_status(job.map_id, "FAIL", elapsed, state["db_attempts"])
         log_business_history(job.map_id, "JOB_FAIL", "ERROR", "FINAL", "FAIL", "Max Attempts Reached", state["db_attempts"], mig_kind)
         logger.error(f"[Graph:FINISH] map_id={job.map_id} | >>> 실패 <<<")
-    
-    return {"elapsed_time": elapsed}
+        return {"elapsed_time": elapsed, "status": "FAIL"}
 
 # Routing Logic
 def should_continue(state: MigrationState) -> Literal["generate", "finalize", "verify", "execute", "llm_retry_wait"]:

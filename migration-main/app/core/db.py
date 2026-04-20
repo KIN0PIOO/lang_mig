@@ -66,12 +66,12 @@ def get_connection():
         if ORACLE_CLIENT_PATH and os.path.exists(ORACLE_CLIENT_PATH):
             try:
                 oracledb.init_oracle_client(lib_dir=ORACLE_CLIENT_PATH)
-                logger.info(f"[DB] Oracle Thick Mode 활성화 (Path: {ORACLE_CLIENT_PATH})")
+                logger.debug(f"[DB] Oracle Thick Mode 활성화 (Path: {ORACLE_CLIENT_PATH})")
             except oracledb.ProgrammingError:
                 pass # 이미 초기화된 경우
             mode_str = "Thick Mode"
         else:
-            logger.info("[DB] Oracle Thin Mode 접속 시도 (No Client Path set)")
+            logger.debug("[DB] Oracle Thin Mode 접속 시도 (No Client Path set)")
             mode_str = "Thin Mode"
             
         # 2. 접속 시도
