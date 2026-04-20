@@ -187,7 +187,8 @@ workflow.add_conditional_edges(
     should_continue,
     {
         "verify": "verify",
-        "generate": "biz_retry_prepare"
+        "generate": "biz_retry_prepare",
+        "finalize": "finalize"
     }
 )
 
