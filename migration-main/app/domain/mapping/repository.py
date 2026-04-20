@@ -87,8 +87,8 @@ def increment_batch_count(map_id: int):
     except Exception as e:
         logger.error(f"[Repository] BATCH_COUNT 업데이트 중 오류: {e}")
 
-def update_job_status(map_id: int, status: str, elapsed_seconds: int = 0, retry_count: int = 0):
-    """작업 통과/실패 시 상태값을 변경하고, 결과를 업데이트합니다."""
+def update_job_status(map_id: int, status: str, elapsed_seconds: int = 0, retry_count: int = 0) -> bool:
+    """작업 통과/실패 시 상태값을 변경하고, 결과를 업데이트합니다. 성공 시 True를 반환합니다."""
     logger.info(f"[Repository] map_id={map_id} | DB 상태를 {status} 로 업데이트 (Retry: {retry_count})")
     
     query = """
@@ -105,6 +105,15 @@ def update_job_status(map_id: int, status: str, elapsed_seconds: int = 0, retry_
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, (status, elapsed_seconds, retry_count, map_id))
+            rowcount = cursor.rowcount
             conn.commit()
+            
+            if rowcount > 0:
+                logger.debug(f"[Repository] map_id={map_id} | 업데이트 성공 (rowcount={rowcount})")
+                return True
+            else:
+                logger.warning(f"[Repository] map_id={map_id} | 업데이트된 행이 없습니다. (조회 실패?)")
+                return False
     except Exception as e:
         logger.error(f"[Repository] 작업 상태 업데이트 중 오류 발생 map_id={map_id}: {e}")
+        return False

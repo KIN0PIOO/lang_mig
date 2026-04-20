@@ -33,10 +33,23 @@ class MigrationOrchestrator:
             "job_start_time": time.time()
         }
 
-        # 2. 그래프 실행
+        # 4. 그래프 실행 (상태 기반 오케스트레이션)
         try:
+            logger.info(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 시작")
             final_state = migration_graph.invoke(initial_state)
-            logger.info(f"[JOB_DONE] map_id={NEXT_SQL_INFO.map_id} | 최종 상태: {final_state['status']} | 소요시간: {final_state['elapsed_time']}초")
+            
+            # 최종 요약 로그
+            status = final_state.get("status", "UNKNOWN")
+            elapsed = final_state.get("elapsed_time", 0)
+            logger.info(f"[JOB_DONE] map_id={NEXT_SQL_INFO.map_id} | 최종 상태: {status} | 소요시간: {elapsed}초")
+            
         except Exception as e:
-            # BatchAbortError 등 치명적 에러는 그대로 상위(스케줄러)로 전파
-            raise e
+            # 그래프 실행 중 예상치 못한 치명적 크래시 발생 시
+            logger.error(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 치명적 크래시 발생: {str(e)}", exc_info=True)
+            
+            # 크래시가 나더라도 해당 작업에 갇히지 않도록 FAIL 처리 시도 (USE_YN='N')
+            from app.domain.mapping.repository import update_job_status
+            update_job_status(NEXT_SQL_INFO.map_id, "FAIL", 0, 0)
+            
+            logger.warning(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 크래시로 인한 강제 FAIL 처리 완료. 다음 작업으로 넘어갑니다.")
+            # 에러를 더 이상 raise 하지 않고, 이 작업만 실패로 마감하여 스케줄러 루프 유지

@@ -93,18 +93,26 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
     ※ 위 DDL 정보를 타겟 테이블 생성 시 반드시 참고하여 정확한 타입을 사용하십시오.
 """
 
-    # 프롬프트 구성 (Oracle 21c 전문가 페르소나 적용)
+    # 프롬프트 구성 (Oracle 전문 마이그레이션 전략가 페르소나 적용)
     prompt = f"""
-    당신은 Oracle 데이터 마이그레이션 전문가입니다.
+    당신은 Oracle 데이터 마이그레이션 전문가이자 SQL 튜닝 전략가입니다.
     제시된 매핑 규칙과 소스 테이블의 실제 DDL 정보를 기반으로
-    (1) 타겟 테이블 생성 DDL, (2) 데이터 이관 DML, (3) 정합성 검증 SQL을 JSON 형식으로 각각 생성하십시오.
+    (1) 타겟 테이블 생성 DDL, (2) 데이터 이관 DML, (3) 정합성 검증 SQL을 JSON 형식으로 생성하십시오.
 
-    [Oracle 버전 제약 — 반드시 준수]
-    현재 환경은 Oracle 11.2 XE입니다. 아래 기능은 12c 이상 전용이므로 절대 사용하지 마십시오:
-    - LATERAL JOIN 금지 → 대신 인라인 뷰(서브쿼리) 또는 WITH절(CTE) 사용
-    - STANDARD_HASH() 금지 → 대신 ORA_HASH() 사용 (결과는 NUMBER, VARCHAR2 필요 시 TO_CHAR() 로 감쌀 것)
-    - FETCH FIRST / OFFSET 금지 → 대신 ROWNUM 사용
-    - LISTAGG ... ON OVERFLOW TRUNCATE 금지
+    [핵심 원칙 - 절대 준수]
+    1. **환각 방지 (Zero Hallucination)**: 
+       - **[매핑 규칙]** 및 **[소스 테이블 실제 DDL 정보]**에 명시되지 않은 컬럼은 절대 사용하지 마십시오.
+       - 예를 들어, 'SALARY'가 매핑 규칙에 없다면 설령 소스 테이블에 있더라도 절대 사용하지 마십시오.
+       - 임의로 'CURRENT_SALARY', 'TOTAL_AMT' 등 그럴싸한 컬럼명을 날조하는 행위는 시스템을 파괴하는 치명적인 오류입니다.
+       
+    2. **데이터 타입 정합성**:
+       - 숫자(`NUMBER`)와 문자열(`VARCHAR2`)을 비교할 때는 반드시 명시적 타입 변환(`TO_NUMBER`, `TO_DATE`)을 사용하십시오.
+       - 특히 `verification_sql`에서 소스의 문자열 값을 타켓의 숫자 컬럼과 비교할 때 `ORA-01722` 에러를 방지하도록 설계하십시오.
+
+    3. **Oracle 11.2 XE 환경 제약**:
+       - 12c 이상 전용 기능(LATERAL, STANDARD_HASH, FETCH FIRST 등)은 절대 사용하지 마십시오.
+       - 해시 비교가 필요하면 `ORA_HASH(column)`를 활용하십시오.
+
 {ddl_info_block}
     [매핑 규칙]
     - 소스 테이블: {from_table}
@@ -112,45 +120,23 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
     - 컬럼 매핑 정보:
 {mapping_info}
 
-    [필수 요구사항]
-    1. ddl_sql (Schema Phase):
-       - 타겟 테이블('{to_table}')을 생성하는 'CREATE TABLE' 문장만 포함하십시오.
-       - 위 [소스 테이블 실제 DDL 정보]의 컬럼 타입/길이/NULL여부를 그대로 반영하십시오.
-         (DDL 정보가 제공된 경우 타입을 임의로 추측하지 마십시오.)
-       - 매핑 대상 컬럼만 타겟 테이블에 포함하십시오.
-       - DROP 문장이나 TRUNCATE 문장은 포함하지 마십시오. (에이전트 로직에서 처리함)
+    [상세 요구사항]
+    1. ddl_sql:
+       - 타겟 테이블('{to_table}') 생성 'CREATE TABLE' 문장만 작성하십시오.
+       - DDL 정보의 컬럼 타입을 엄격히 따르십시오. 길이나 정밀도를 임의로 줄이지 마십시오.
 
-    2. migration_sql (Migration Phase):
-       - 데이터를 실제로 옮기는 'INSERT INTO ... SELECT ...' 문장만 포함하십시오.
-       - **절대 주의**: 'CREATE TABLE', 'DROP TABLE', 'TRUNCATE' 등의 DDL 문장은 이 필드에 포함하지 마십시오. 오직 DML(INSERT)만 포함해야 합니다.
-       - 반드시 위에서 정의한 타겟 테이블('{to_table}')과 소스 테이블('{from_table}')을 사용하십시오.
-       - 소스 테이블명이 '{from_table}'이라면 이 이름 그대로 사용하십시오. 임의로 스키마 접두어를 붙이거나 제거하지 마십시오. (hallucination 주의)
-       - DATE/TIMESTAMP 컬럼의 경우 소스 타입이 VARCHAR2이면 TO_DATE 변환을 적용하고, 이미 DATE/TIMESTAMP이면 변환 없이 그대로 사용하십시오.
-       - FR_COL에 'c.' 등의 alias 접두어가 포함된 경우(예: c.SALARY_NUM, c.HIRE_DATE_ROUNDTRIP), 이는 동일 SELECT 내 다른 파생 컬럼을 참조하는 것입니다.
-         이 경우 반드시 해당 파생 컬럼들을 내부 서브쿼리에서 먼저 계산하고 해당 alias(c 등)로 별칭을 붙인 뒤, 외부 SELECT에서 c.컬럼명으로 참조하십시오.
-       - **[절대 금지] 매핑 규칙(DTL)에 없는 컬럼(예: FIRST_NAME, LAST_NAME, EMAIL 등 원본 테이블 컬럼)을 임의로 타겟 테이블에 추가하지 마십시오. (hallucination 주의)**
-       - 이 단계는 테이블이 이미 생성된 상태에서 실행됩니다.
+    2. migration_sql:
+       - 'INSERT INTO {to_table} (컬럼...) SELECT (표현식...) FROM {from_table}' 형식을 따르십시오.
+       - 소스 테이블명이 {from_table}이면 alias를 사용하여 가독성을 높이십시오 (예: FROM {from_table} src).
+       - 소스에 파생 표현식(파생 컬럼)이 많은 경우, 핵심 로직은 내부 서브쿼리(src_base)에서 처리하고 외부 SELECT에서는 매핑만 수행하십시오.
 
-3. verification_sql (Verification Phase):
-   - 소스/타겟 테이블의 데이터 정합성을 비교하는 단일 SELECT 문장을 작성하십시오.
-   - 반드시 source side와 target side를 각각 집계한 후 최종 DIFF를 계산하십시오.
-   - source side는 원본 테이블을 직접 집계하지 말고, migration_sql의 SELECT 결과와 동일한 논리의 내부 서브쿼리(src_base)를 먼저 생성한 뒤 집계하십시오.
-   - target side는 타겟 테이블('{to_table}')에서 실제 타겟 컬럼명으로 집계하십시오.
-   - CASE, CONCAT, CAST, TO_DATE, TO_CHAR, STANDARD_HASH, ROW_NUMBER, DENSE_RANK, COUNT OVER 등의 파생 컬럼은 반드시 src_base 내부에서 먼저 계산한 뒤 바깥에서 COUNT(별칭) 하십시오.
-   - Oracle 제약상 window function을 COUNT(window_function(...)) 형태로 직접 사용하지 마십시오.
-   - tgt alias에서는 소스 컬럼명을 사용하지 말고, 반드시 타겟 컬럼명만 사용하십시오.
-   - **[절대 필수] JOIN ON 절에서도 타겟 테이블의 실제 컬럼명(TO_COL 기준)만 사용하십시오. 소스 컬럼명이나 TO_CHAR(TGT.소스컬럼) 형태는 절대 사용하지 마십시오.**
-   - **[절대 필수] 최종 SELECT 결과는 반드시 'DIFF'라는 이름의 단일 컬럼 하나만 반환하십시오.**
-   - SRC_COUNT, TGT_COUNT, DIFF_xxx 등 진단용 컬럼을 추가로 SELECT하지 마십시오. 오직 DIFF 하나만 출력해야 합니다.
-   - DIFF는 모든 불일치 건수의 합계(ABS 포함)이며, 0이면 완벽한 일치로 간주됩니다.
-   - 올바른 출력 예시: SELECT SUM(...) AS DIFF FROM ...
-   - 잘못된 출력 예시: SELECT SRC_COUNT, TGT_COUNT, DIFF_COL1, DIFF_COL2, ..., DIFF FROM ...
+    3. verification_sql:
+       - **[구조적 제약]** 반드시 `SELECT ABS(S.CNT - T.CNT) AS DIFF FROM (...) S JOIN (...) T ON ...` 형식을 취하십시오.
+       - **[타입 안전]** 조인(ON) 및 비교 시 데이터 타입이 다르면 반드시 `CAST` 또는 `TO_NUMBER`를 사용하십시오.
+       - **[단일 출력]** 오직 'DIFF' 컬럼 하나만 출력해야 합니다. 다른 정보를 섞지 마십시오.
 
     4. 공통:
-       - DATE 컬럼 처리 시 TO_DATE 함수와 'YYYY-MM-DD HH24:MI:SS' 포맷을 사용하십시오.
-       - 여러 SQL 문장이 포함될 경우 각 문장은 반드시 슬래시(/) 단독 라인으로 구분하십시오.
-
-    응답은 반드시 'ddl_sql', 'migration_sql', 'verification_sql' 키를 가진 JSON 객체여야 합니다.
+       - 출력은 반드시 JSON 형태여야 하며, SQL 내부에 불필요한 주석을 넣지 마십시오.
     """
 
     # [추가] 인간 전문가가 직접 수정한 정답 SQL이 있다면 프롬프트에 반영
